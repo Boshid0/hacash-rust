@@ -7,7 +7,7 @@ extern "C" {
 
 #include <stdint.h>
 
-void c_x16rs_hash(const int loopnum, const char* input32, char* output32);
+void c_x16rs_hash(const int loopnum, const char *input_hash, char *output_hash);
 
 #ifdef __cplusplus
 }

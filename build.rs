@@ -25,9 +25,29 @@ cp target/x86_64-apple-darwin/release/hacash ./hacash_macos
 
 
 fn main() {
-    cc::Build::new()
-        .file("src/x16rs/x16rs.c")
-        .compile("x16rs");
+    if cfg!(target_os = "linux") {
+        cc::Build::new()
+            .include("src/x16rs/simd-utils")
+            .define("USE_NEW_ALGO", "1")
+            .file("src/x16rs/algo/whirlpool/whirlpool_x86_64.S")
+            .flag("-maes")
+            .flag("-msse2")
+            .flag("-mssse3")
+            .flag("-msse4.1")
+            .flag("-msse4.2")
+            .include("src/x16rs/algo")
+            .file("src/x16rs/x16rs.c")
+            .flag("-O3")
+            .flag("-march=native")
+            .compile("x16rs");
+    } else {
+        cc::Build::new()
+            .include("src/x16rs/algo")
+            .file("src/x16rs/x16rs.c")
+            .flag("-O3")
+            .flag("-march=native")
+            .compile("x16rs");
+    }
     println!("cargo:rerun-if-changed=src/x16rs/x16rs.c");
 }
 
