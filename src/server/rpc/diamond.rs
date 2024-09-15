@@ -66,14 +66,17 @@ async fn diamond(State(ctx): State<ApiCtx>, q: Query<Q3946>) -> impl IntoRespons
 defineQueryObject!{ Q8346,
     limit, Option<usize>, None,
     number, Option<usize>, None,
+    since, Option<bool>, None,
 }
 
 async fn diamond_bidding(State(ctx): State<ApiCtx>, q: Query<Q8346>) -> impl IntoResponse {
+    ctx_store!(ctx, store);
     ctx_mintstate!(ctx, mintstate);
     let lastdia = mintstate.latest_diamond();
     q_unit!(q, unit);
     q_must!(q, limit, 20);
     q_must!(q, number, 0);
+    q_must!(q, since, false);
     let number = number as u32;
 
     let mut datalist = vec![];
@@ -93,7 +96,7 @@ async fn diamond_bidding(State(ctx): State<ApiCtx>, q: Query<Q8346>) -> impl Int
         };
         let act = diamtact.head;
         if number > 0 && number != act.number.uint() {
-            return true // number not match
+            return true // number not match, continue
         }
         // append
         let mut one = jsondata!{
@@ -113,11 +116,21 @@ async fn diamond_bidding(State(ctx): State<ApiCtx>, q: Query<Q8346>) -> impl Int
     };
     txpool.iter_at(&mut pick_dmint, TXPOOL_GROUP_DIAMOND_MINT);
 
-    // return data
-    api_data(jsondata!{
-        "number", *lastdia.number + 1, // next diamond
+    let mut data = jsondata!{
+        "number", *lastdia.number + 1, // current bidding diamond
         "list", datalist,
-    })
+    };
+
+    if since {
+        let mut acution_start = curtimes(); 
+        if let Ok(blk) = ctx.load_block( &store, &lastdia.born_height.to_string() ) {
+            acution_start = blk.objc().timestamp().uint();
+            data.insert("since", json!(acution_start));
+        }
+    }
+
+    // return data
+    api_data(data)
 }
 
 
@@ -168,14 +181,13 @@ async fn diamond_views(State(ctx): State<ApiCtx>, q: Query<Q5395>) -> impl IntoR
         datalist.push(data);
     };
 
+    // read diamonds
     if name.len() >= DiamondName::width() {
 
-        let names: Vec<String> = name.replace(" ", "").split(",").map(|s|s.to_string()).collect();
-        for a in names {
-            if a.len() != DiamondName::width() {
-                continue
-            }
-            let dian = DiamondName::must(&a.into_bytes());
+        let Ok(names) = DiamondNameListMax200::from_readable(&name) else {
+            return api_error("diamond name error")
+        };
+        for dian in names.list() {
             query_item(&dian);
         }
 
@@ -199,6 +211,90 @@ async fn diamond_views(State(ctx): State<ApiCtx>, q: Query<Q5395>) -> impl IntoR
     })
 }
 
+
+
+
+/******************* diamond engrave *******************/
+
+
+defineQueryObject!{ Q5733,
+    height, u64, 0,
+    txposi, Option<isize>, None, // -1,
+    tx_hash, Option<bool>, None, // if return txhash
+}
+
+async fn diamond_engrave(State(ctx): State<ApiCtx>, q: Query<Q5733>) -> impl IntoResponse {
+    ctx_store!(ctx, store);
+    ctx_mintstate!(ctx, mintstate);
+    q_unit!(q, unit);
+    q_must!(q, tx_hash, false);
+    q_must!(q, txposi, -1);
+
+    let mut datalist = vec![];
+
+    // load block
+    let blkpkg = ctx.load_block(&store, &q.height.to_string());
+    if let Err(e) = blkpkg {
+        return api_error(&e)
+    }
+    let blkobj = blkpkg.unwrap();
+    let blkobj = blkobj.objc();
+    let trs = blkobj.transactions();
+    if trs.len() == 0 {
+        return api_error("transaction len error")
+    }
+    if txposi >= 0 {
+        if txposi >= trs.len() as isize - 1 {
+            return api_error("txposi overflow")
+        }
+    }
+
+    // parse
+    let pick_engrave = |tx: &dyn TransactionRead| -> Option<Vec<_>> {
+        let mut res = vec![];
+        let txhx = tx.hash();
+        let mut append_one = |data: JsonObject| {
+            let mut engobj = data;
+            if tx_hash {
+                engobj.insert("tx_hash", json!(txhx.hex()));
+            }
+            res.push(json!(engobj));
+        };
+        for act in tx.actions() {
+            if act.kind() == DiamondInscription::kid() {
+                let action = DiamondInscription::must(&act.serialize());
+                append_one(jsondata!{
+                    "diamonds", action.diamonds.readable(),
+                    "inscription", action.engraved_content.readable_or_hex(),
+                });
+            }else if act.kind() == DiamondInscriptionClear::kid() {
+                let action = DiamondInscriptionClear::must(&act.serialize());
+                append_one(jsondata!{
+                    "diamonds", action.diamonds.readable(),
+                    "clear", true,
+                });
+            }
+        }
+        Some(res)
+    };
+
+    let tx_ary = match txposi >= 0 {
+        true => { let i=txposi as usize; &trs[1..][i..i+1] },
+        false => &trs[1..],
+    };
+
+    // ignore coinbase tx
+    for tx in tx_ary {
+        if let Some(mut egrs) = pick_engrave(tx.as_read()) {
+            datalist.append(&mut egrs);
+        }
+    }
+
+    // return data
+    api_data(jsondata!{
+        "list", datalist,
+    })
+}
 
 
 
